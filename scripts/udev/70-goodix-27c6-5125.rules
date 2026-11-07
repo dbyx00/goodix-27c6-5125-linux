@@ -1,0 +1,4 @@
+# Keep the Goodix 27c6:5125 fingerprint reader out of USB autosuspend.
+# It is a full-speed CDC device and can fail to re-open after a suspend if the
+# kernel autosuspends it.
+ACTION=="add|change", SUBSYSTEM=="usb", ATTR{idVendor}=="27c6", ATTR{idProduct}=="5125", ATTR{power/control}="on", ENV{ID_AUTOSUSPEND}="0", RUN+="/bin/sh -c 'echo on > /sys%p/power/control'"

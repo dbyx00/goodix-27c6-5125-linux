@@ -1,0 +1,194 @@
+#!/usr/bin/env python3
+"""Control tool for the Goodix 27c6:5125 driver.
+
+Read-only by default. The only commands that write are:
+  provision  (explicit --yes; writes a new PSK to the sensor)
+  import-psk (writes a local PSK file after verifying its hash)
+  forget-psk (removes the local PSK file; does not touch the sensor)
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import pathlib
+import re
+import subprocess
+import sys
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+PREFIX = pathlib.Path(os.environ.get("PREFIX", "/opt/goodix-27c6-5125"))
+PSK_DIR = pathlib.Path("/var/lib/fprint/goodix5125")
+PSK_FILE = PSK_DIR / "psk"
+PROVISION_DROPIN = pathlib.Path(
+    "/etc/systemd/system/fprintd.service.d/60-goodix-provision.conf"
+)
+PROBE = ROOT / "tools" / "probe_readonly.py"
+ZERO_HASH = ROOT / "tools" / "zero_psk_hash"
+
+
+def die(msg: str) -> "NoReturn":
+    print(f"error: {msg}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def require_root() -> None:
+    if os.geteuid() != 0:
+        die("this command needs root (USB access): sudo goodix-ctl ...")
+
+
+def run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
+    return subprocess.run(cmd, text=True, **kwargs)
+
+
+def probe() -> dict:
+    require_root()
+    if not PROBE.exists():
+        die(f"probe not found: {PROBE}")
+    result = run([sys.executable, str(PROBE)], capture_output=True)
+    output = result.stdout + result.stderr
+    match = re.search(r"^PROBE_JSON:(.*)$", output, re.MULTILINE)
+    if not match:
+        print(output, file=sys.stderr)
+        die("probe did not return JSON")
+    data = json.loads(match.group(1))
+    if data.get("error"):
+        die(data["error"])
+    return data
+
+
+def cmd_probe(args: argparse.Namespace) -> None:
+    data = probe()
+    print(json.dumps(data, indent=2, sort_keys=True))
+
+
+def cmd_status(args: argparse.Namespace) -> None:
+    print("== device ==")
+    lsusb = run(["lsusb", "-d", "27c6:5125"], capture_output=True)
+    print(lsusb.stdout.strip() or "not present on the host")
+    print()
+    print("== driver ==")
+    print(f"prefix: {PREFIX}")
+    lib = PREFIX / "lib" / "libfprint-2.so.2"
+    print(f"libfprint: {'present' if lib.exists() else 'MISSING'}")
+    if shutil_which("systemctl"):
+        active = run(["systemctl", "is-active", "fprintd"], capture_output=True)
+        print(f"fprintd: {active.stdout.strip() or 'unknown'}")
+    print(f"local PSK file: {'present' if PSK_FILE.exists() else 'absent'}")
+    print()
+    print("== sensor (read-only) ==")
+    try:
+        data = probe()
+    except SystemExit:
+        return
+    for key in ("firmware", "chip_id", "mcu_state", "psk_read_ok", "psk_hash"):
+        print(f"{key}: {data.get(key)}")
+    print()
+    print("The PSK hash is SHA256(whitebox(PSK)); it is not the PSK itself.")
+
+
+def shutil_which(name: str) -> bool:
+    from shutil import which
+
+    return which(name) is not None
+
+
+def cmd_provision(args: argparse.Namespace) -> None:
+    require_root()
+    if args.done:
+        if PROVISION_DROPIN.exists():
+            PROVISION_DROPIN.unlink()
+            run(["systemctl", "daemon-reload"], check=False)
+            run(["systemctl", "try-restart", "fprintd"], check=False)
+            print("provisioning drop-in removed")
+        else:
+            print("no provisioning drop-in present")
+        return
+
+    if not args.yes:
+        die("this writes a new PSK to the sensor; re-run with --yes")
+
+    PROVISION_DROPIN.parent.mkdir(parents=True, exist_ok=True)
+    PROVISION_DROPIN.write_text(
+        "[Service]\nEnvironment=GOODIX5125_PROVISION_PSK=random\n"
+    )
+    run(["systemctl", "daemon-reload"], check=True)
+    run(["systemctl", "restart", "fprintd"], check=True)
+    print("provisioning authorized for the next device open")
+    print("run: fprintd-enroll -f right-index-finger \"$USER\"")
+    print("then: sudo goodix-ctl provision --done")
+
+
+def cmd_forget(args: argparse.Namespace) -> None:
+    require_root()
+    if not args.yes:
+        die("this removes the local PSK file (not the sensor); use --yes")
+    if PSK_FILE.exists():
+        PSK_FILE.unlink()
+        print(f"removed {PSK_FILE}")
+    else:
+        print("no local PSK file")
+    print("The sensor pairing is unchanged.")
+
+
+def cmd_import(args: argparse.Namespace) -> None:
+    require_root()
+    psk_hex = args.psk.lower().strip()
+    if not re.fullmatch(r"[0-9a-f]{64}", psk_hex):
+        die("PSK must be exactly 64 hexadecimal characters (32 bytes)")
+    if not ZERO_HASH.exists():
+        die(f"hash helper not found: {ZERO_HASH}; run scripts/install.sh first")
+    expected = run([str(ZERO_HASH), psk_hex], capture_output=True, check=True)
+    expected_hash = expected.stdout.strip()
+    data = probe()
+    sensor_hash = (data.get("psk_hash") or "").lower()
+    if not sensor_hash:
+        die("could not read the sensor PSK hash")
+    if expected_hash != sensor_hash:
+        die(
+            "PSK does not match the sensor: "
+            f"expected {expected_hash}, sensor reports {sensor_hash}"
+        )
+    PSK_DIR.mkdir(parents=True, exist_ok=True)
+    os.chmod(PSK_DIR, 0o700)
+    PSK_FILE.write_text(psk_hex)
+    os.chmod(PSK_FILE, 0o600)
+    print(f"wrote {PSK_FILE} (mode 0600); sensor unchanged")
+
+
+def main() -> None:
+    global PREFIX
+    parser = argparse.ArgumentParser(
+        description="Goodix 27c6:5125 control tool (read-only by default)"
+    )
+    parser.add_argument("--prefix", default=str(PREFIX), help="driver prefix")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    sub.add_parser("probe", help="read-only hardware probe (JSON)").set_defaults(
+        func=cmd_probe
+    )
+    sub.add_parser("status", help="human-readable status").set_defaults(
+        func=cmd_status
+    )
+
+    p = sub.add_parser("provision", help="authorize one PSK replacement")
+    p.add_argument("--yes", action="store_true", help="confirm the write")
+    p.add_argument("--done", action="store_true", help="remove the authorization")
+    p.set_defaults(func=cmd_provision)
+
+    p = sub.add_parser("forget-psk", help="remove the local PSK file only")
+    p.add_argument("--yes", action="store_true")
+    p.set_defaults(func=cmd_forget)
+
+    p = sub.add_parser("import-psk", help="import a known PSK after hash check")
+    p.add_argument("psk", help="32-byte PSK as 64 hex characters")
+    p.set_defaults(func=cmd_import)
+
+    args = parser.parse_args()
+    PREFIX = pathlib.Path(args.prefix)
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

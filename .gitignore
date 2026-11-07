@@ -1,0 +1,34 @@
+# Build and runtime artifacts
+.cache/
+upstream/
+build/
+build-*/
+*.o
+*.so
+*.so.*
+*.a
+*.iso
+*.img
+*.qcow2
+*.vmdk
+*.log
+*.pgm
+*.pcap
+*.pcapng
+
+# Secrets and device state
+psk
+psk.bin
+goodix.dat
+*.psk
+*.otp
+secrets/
+
+# Editor / OS
+.DS_Store
+*.swp
+
+# Python cache and locally built helper
+__pycache__/
+*.pyc
+tools/zero_psk_hash
