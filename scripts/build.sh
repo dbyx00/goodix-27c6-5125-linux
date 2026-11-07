@@ -37,7 +37,7 @@ deps_fedora() {
 deps_arch() {
     pacman -S --needed --noconfirm \
         base-devel meson ninja pkgconf git glib2 libgudev gusb libusb \
-        openssl systemd-libs pixman cairo python-pyusb
+        openssl systemd systemd-libs pixman cairo python-pyusb
 }
 
 deps_suse() {

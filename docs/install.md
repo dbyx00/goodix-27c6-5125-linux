@@ -12,6 +12,10 @@
 
 Your distro's libfprint and fprintd packages are not replaced.
 
+Tested build: Ubuntu 26.04 (kernel 7.0). The Fedora, Arch and openSUSE
+dependency recipes use the same meson build but are best-effort; please report
+package-name fixes.
+
 ## Quick install
 
 ```sh
