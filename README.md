@@ -152,7 +152,8 @@ Tested on one Huawei MateBook 16 (CREM-WXX9) running Ubuntu 26.04:
   still returned `verify-match`.
 
 Details, limitations and the exact commands are in
-[docs/validation.md](docs/validation.md). The project does not claim FAR/FRR
+[docs/validation.md](docs/validation.md). The reproducible Windows recovery harness
+is in [tests/windows/](tests/windows/). The project does not claim FAR/FRR
 numbers from a single device.
 
 ## Credits

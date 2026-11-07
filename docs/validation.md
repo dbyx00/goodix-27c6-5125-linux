@@ -112,7 +112,8 @@ the stale PSK A cache, and booted with the sensor carrying Linux PSK B.
 - No firmware command was sent by the project at any point.
 
 This is the key no-brick result: a Windows installation with a stale PSK
-re-pairs instead of leaving the sensor unusable. Windows fingerprints may still
+re-pairs instead of leaving the sensor unusable. The reproducible test harness
+is in [`tests/windows/`](../tests/windows/). Windows fingerprints may still
 need to be re-enrolled after the re-pair; the transport PSK and the templates
 are separate.
 
